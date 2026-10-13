@@ -44,14 +44,14 @@ contract QuestionsAbandonTest is QuestionsFixture {
         assertEq(q.ABANDON_AFTER_SILENCE(), 12 hours);
         assertEq(submitAfterSilence, q.SUBMIT_AFTER_SILENCE());
         assertEq(abandonAfterCompleted, q.ABANDON_AFTER_COMPLETED());
-        assertEq(abandonAfterSilence, q.ABANDON_AFTER_SILENCE());
+        assertEq(abandonAfterSilence, 36 hours + 5 minutes + 1);
         // `submit` opens long before a round can be closed.
         assertLt(submitAfterSilence, abandonAfterSilence);
     }
 
-    /// @notice The Intake never completed the request: the round can be closed after twelve hours,
+    /// @notice The Intake never completed the request: the round can be closed after the full silence deadline,
     /// and not one second sooner.
-    function test_abandon_afterTwelveHoursOfSilence() public {
+    function test_abandon_afterTheFullSilenceDeadline() public {
         bytes32 intakeId = _request(feedId);
         uint256 askedAt = vm.getBlockTimestamp();
         _assertStep(feedId, Questions.AbandonStep.Wait, askedAt + abandonAfterSilence);
@@ -194,15 +194,15 @@ contract QuestionsAbandonTest is QuestionsFixture {
         q.abandon(feedId);
     }
 
-    /// @notice Seeing the completion never makes a round wait longer than twelve hours from its
-    /// request, and after twelve hours one call is enough whether or not anything was recorded.
-    function test_abandon_twelveHoursFromTheRequestIsAlwaysEnough() public {
+    /// @notice Seeing the completion never makes a round wait longer than the full silence deadline from its
+    /// request, and after the full silence deadline one call is enough whether or not anything was recorded.
+    function test_abandon_theFullSilenceDeadlineIsAlwaysEnough() public {
         bytes32 intakeId = _request(feedId);
         uint256 askedAt = vm.getBlockTimestamp();
         skip(abandonAfterSilence - 10 minutes);
         _completeWithoutAnswer(intakeId, 1);
 
-        // Seen ten minutes before the twelve hours are up: closable at twelve hours, not thirty
+        // Seen ten minutes before the the full silence deadline are up: closable at the full silence deadline, not thirty
         // minutes on.
         assertLt(10 minutes, abandonAfterCompleted);
         _assertStep(feedId, Questions.AbandonStep.StartWait, askedAt + abandonAfterSilence);
@@ -215,7 +215,7 @@ contract QuestionsAbandonTest is QuestionsFixture {
         skip(1);
         assertTrue(q.abandon(feedId));
 
-        // A completed request nobody looked at for twelve hours is closed by a single call, and
+        // A completed request nobody looked at for the full silence deadline is closed by a single call, and
         // one second sooner the same call would only have started the thirty minutes.
         vm.roll(vm.getBlockNumber() + 2 * uint256(CADENCE));
         intakeId = _request(feedId);
@@ -243,7 +243,7 @@ contract QuestionsAbandonTest is QuestionsFixture {
         intakeId = _request(feedId);
         uint256 askedAt = vm.getBlockTimestamp();
         _assertStep(feedId, Questions.AbandonStep.Wait, askedAt + abandonAfterSilence);
-        // Some time later, well inside the twelve hours.
+        // Some time later, well inside the the full silence deadline.
         skip(2 hours);
         _completeWithoutAnswer(intakeId, 1);
         _assertStep(feedId, Questions.AbandonStep.StartWait, vm.getBlockTimestamp() + abandonAfterCompleted);
@@ -345,7 +345,7 @@ contract QuestionsAbandonTest is QuestionsFixture {
             _expectTooEarly(askedAt + abandonAfterSilence);
             oddQ.abandon(id);
 
-            // One second before the twelve hours are up it is still too early; at twelve hours
+            // One second before the the full silence deadline are up it is still too early; at the full silence deadline
             // one call closes the round.
             skip(abandonAfterSilence - abandonAfterCompleted - 1 minutes - 1);
             _expectTooEarly(askedAt + abandonAfterSilence);

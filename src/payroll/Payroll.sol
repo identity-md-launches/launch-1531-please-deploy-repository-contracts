@@ -26,8 +26,8 @@ interface IMeterPosition {
 /// 2,000 seats as pull claims, 20% to a budget that keeps three house feeds of Standing Questions
 /// funded. Tips are separate money: they are not split, they wait for the seat whose agent did the job.
 ///
-/// There is no owner, no setter and no way to pause. Every function is open to anyone; the only thing a
-/// caller chooses is when the fixed rules run. Every address this contract depends on is a constructor
+/// There is no owner, no setter and no way to pause. Anyone may trigger the fixed rules, except
+/// that a contract holding a seat must initiate its own claims (Payroll itself can recycle its share). Every address this contract depends on is a constructor
 /// argument written in the launch manifest.
 ///
 /// @dev How the books are kept. The contract stores running totals (`ledger`) and derives what it owes
@@ -57,9 +57,9 @@ interface IMeterPosition {
 ///    stays on it; Payroll never takes it back.
 ///
 /// Limits a reader should know:
-///  - A claim pays whoever holds the seat at that moment, and anyone may trigger it. While a seat sits
-///    in another contract (an escrow, a marketplace, a loan), its accrued share and the tips of agents
-///    bound to it can be paid to that contract. Claim before moving a seat.
+///  - A claim pays whoever holds the seat at that moment. A contract holder must initiate payment
+///    itself, except Payroll's own recycling, so passive escrows keep the share and tips unclaimed.
+///    Code under construction or a future contract address cannot be identified by this check.
 ///  - A seat whose owner the seat token never names again keeps its share of the seat pool here for
 ///    good. Tips bound to such a seat are different: once they have waited their time they can be
 ///    swept to the pool.
@@ -324,6 +324,8 @@ contract Payroll is IPayroll, ReentrancyGuardTransient {
     error UnknownSeat(uint256 tokenId);
     /// @notice The seat token did not name an owner for this seat. Nothing is lost: claim again later.
     error SeatHasNoOwner(uint256 tokenId);
+    /// @notice A contract holding a seat must initiate its own claim to accept the IMD.
+    error ContractOwnerMustClaim(address owner);
     /// @notice `claimSeats` was given more than `MAX_SEATS_PER_CALL` ids.
     error TooManySeats(uint256 given, uint256 max);
     /// @notice The Adapter has no binding for this agent (its call reverted or returned too little).
@@ -539,17 +541,14 @@ contract Payroll is IPayroll, ReentrancyGuardTransient {
     // ---------------------------------------------------------------------------------------------
 
     /// @inheritdoc IPayroll
-    /// @dev The money goes to `ownerOf(tokenId)` as the seat token reports it during this call, whoever
-    /// the caller is, so a seat can be claimed for its owner by a keeper and the claim follows the seat
-    /// when it is sold.
+    /// @dev The money goes to `ownerOf(tokenId)` during this call, so the claim follows the seat
+    /// when sold. A keeper may claim for an ordinary wallet. A contract owner must call for itself
+    /// (`ContractOwnerMustClaim`), so observers cannot force IMD into a passive NFT escrow.
+    /// Payroll's own shares may still be claimed by anyone and recycled as unbooked revenue.
     ///
-    /// That has a consequence an owner should know: while a seat is held by another contract (an
-    /// escrow, a marketplace, a loan, even for one transaction), anyone can call this and the seat's
-    /// whole accrued share is paid to that contract. Claim before moving a seat.
-    ///
-    /// Reverts `UnknownSeat` for an id outside the seats and `SeatHasNoOwner` when the seat token does
-    /// not name an owner; in that case the seat's share keeps growing and is paid in full once it has
-    /// one. Returns zero when nothing is due.
+    /// Reverts `UnknownSeat` for an id outside the seats and `SeatHasNoOwner` when the seat token
+    /// does not name an owner. Unpaid shares continue accruing and follow the seat when it leaves
+    /// escrow. Returns zero when nothing is due, without checking the owner or caller.
     function claimSeat(uint256 tokenId) external nonReentrant returns (uint256 paid) {
         if (tokenId >= SEAT_COUNT) revert UnknownSeat(tokenId);
         uint256 accrued = seatAccrued;
@@ -557,6 +556,7 @@ contract Payroll is IPayroll, ReentrancyGuardTransient {
         if (paid == 0) return 0;
         (bool ok, address owner) = _ownerOf(tokenId);
         if (!ok) revert SeatHasNoOwner(tokenId);
+        if (!_claimAllowed(owner)) revert ContractOwnerMustClaim(owner);
 
         seatPaid[tokenId] = accrued;
         _ledger.seatClaimed += paid;
@@ -565,9 +565,10 @@ contract Payroll is IPayroll, ReentrancyGuardTransient {
     }
 
     /// @notice Claims many seats in one call. Anyone may call; each seat's share goes to its own owner
-    /// as the seat token names it during the call (see the warning on `claimSeat`).
+    /// as the seat token names it during the call, subject to the caller check on `claimSeat`.
     /// @dev Ids that are not seats, seats with nothing due, repeated ids and seats whose owner cannot be
-    /// read are skipped without reverting, so one seat can never hold up the rest of a list. Neighbouring
+    /// read or whose contract owner did not initiate the claim are skipped, so one seat cannot hold up
+    /// the rest of a list. Neighbouring
     /// ids with the same owner are paid in one transfer. Reverts `TooManySeats` above
     /// `MAX_SEATS_PER_CALL` ids; a full list of seats never paid before uses about 10 million gas.
     /// @return paid The total IMD paid out by this call.
@@ -586,7 +587,7 @@ contract Payroll is IPayroll, ReentrancyGuardTransient {
             uint256 due = accrued - seatPaid[tokenId];
             if (due == 0) continue;
             (bool ok, address owner) = _ownerOf(tokenId);
-            if (!ok) continue;
+            if (!ok || !_claimAllowed(owner)) continue;
 
             seatPaid[tokenId] = accrued;
             paid += due;
@@ -615,8 +616,8 @@ contract Payroll is IPayroll, ReentrancyGuardTransient {
     /// @dev The Adapter is asked which token the agent is bound to, with a low-level call that must
     /// succeed and return at least 96 bytes. The tip is paid only when that token is one of the seats;
     /// all of it, whatever its age, goes to the seat's owner as of this call. As with `claimSeat`,
-    /// anyone may call and whoever holds the seat at that moment is paid, so claim before moving a
-    /// seat into another contract.
+    /// a contract holding the seat must initiate its own claim (`ContractOwnerMustClaim`), except
+    /// for Payroll itself. Otherwise anyone may call. Unpaid tips follow the seat out of escrow.
     ///
     /// Reverts `AgentNotBound`, `AgentBoundElsewhere` or `SeatHasNoOwner` when it cannot be paid yet
     /// (the tip stays owed), and `GasTooLow` when the transaction could not give the Adapter read its
@@ -633,11 +634,19 @@ contract Payroll is IPayroll, ReentrancyGuardTransient {
         if (binding == Binding.Elsewhere) revert AgentBoundElsewhere(agentId);
         (bool ok, address owner) = _ownerOf(tokenId);
         if (!ok) revert SeatHasNoOwner(tokenId);
+        if (!_claimAllowed(owner)) revert ContractOwnerMustClaim(owner);
 
         delete _tips[agentId];
         _ledger.tipsClaimed += paid;
         emit TipClaimed(agentId, tokenId, owner, paid);
         IMD.safeTransfer(owner, paid);
+    }
+
+    /// @dev Keep permissionless payments to wallets and Payroll's own revenue recycling. Other
+    /// code accounts must ask for payment themselves; a passive NFT escrow cannot lose the
+    /// seat's accrued IMD to an observer's claim. Unclaimed balances still follow the seat.
+    function _claimAllowed(address owner) private view returns (bool) {
+        return msg.sender == owner || owner == address(this) || owner.code.length == 0;
     }
 
     /// @notice Moves the part of an agent's tips that has waited long enough to the seat pool, when

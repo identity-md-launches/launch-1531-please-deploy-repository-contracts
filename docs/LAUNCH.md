@@ -13,7 +13,8 @@ was bought for each of the three house feeds, with the bytes `Questions` will se
 were attested. The code was then audited twice by IdentityMD's own audit agents; what they found
 and what was done is in `docs/AUDITS.md`. After the audits two waits in `Questions` were changed,
 because of what the same day showed about how late the Intake's callback can be: section 4 gives
-the values and the reason, and that change has not been audited.
+the values and the reason. The supplied launch audit subsequently reproduced tip reassignment,
+premature closure and forced escrow claims; `ADAPTATION.md` records the resulting changes and tests.
 
 The tests in `test/launch/` and `test/questions/HouseFeedProofs.t.sol` read this file. The blocks
 that follow a marker comment (`<!-- manifest -->`, `<!-- feedId:… -->`, `<!-- createFeed:… -->`,
@@ -172,7 +173,7 @@ feed's first body proved impossible to attest, see section 5):
 | No constructor holds CALL, STATICCALL, an EXTCODE instruction, BALANCE, CREATE or CREATE2 | `test_launch_constructorsMakeNoCallAndNoCodeCheck` |
 | On a mainnet fork, the launch deployer's `launchContracts` call to the real ProjectFactory creates the three contracts at the predicted addresses | `test_fork_rehearsal_factoryCreatesTheThreeContracts` (fork suite) |
 
-Measured sizes (`forge build --sizes`; the protocol's limits are 24,576 and 49,152 bytes):
+Pre-adaptation sizes (final sizes are in `ADAPTATION.md`; the protocol's limits are 24,576 and 49,152 bytes):
 
 | Contract | Runtime bytes | Initcode bytes | Initcode with arguments |
 |---|---|---|---|
@@ -180,14 +181,14 @@ Measured sizes (`forge build --sizes`; the protocol's limits are 24,576 and 49,1
 | JobsReport | 9,320 | 9,618 | 9,746 |
 | Payroll | 11,715 | 12,429 | 12,717 |
 
-`Questions` is 37 bytes under our own 23,000-byte gate and 1,613 bytes under the limit. It has no room
+Before the launch adaptation, `Questions` was 37 bytes under our own 23,000-byte gate and 1,613 bytes under the limit. It has no room
 left for additions of any substance; that is known and accepted, since nothing can be added after
 launch anyway. The audit fixes changed `Payroll` (154 bytes more than before them) and nothing in
 the bytecode of the other two. The change of the two waits that followed (section 4) changed
 `Questions` and nothing else, and made it 23 bytes smaller than the 22,986 it had: two of its
 getters now return the same thirty minutes, and the compiler serves both from one piece of code.
 
-Launch gas:
+Pre-adaptation launch gas (the gates remain enforced by the final tests):
 
 | Measure | Gas | Where it comes from |
 |---|---|---|
@@ -213,7 +214,7 @@ setter and no upgrade path. Each value is listed with the reason it has the valu
 | `ISSUED_AT_TOLERANCE` | 5 minutes | From the protocol's library: how far ahead of the chain's clock a signing time may be. |
 | `SUBMIT_AFTER_SILENCE` | 30 minutes | When anyone may hand in an answer for a request the Intake has still not completed. The callback has the first half hour to itself; after it, an answer the oracle has signed does not have to wait for the Intake's writer, which can be hours late (the reading of 13 October 2026, below this table). Thirty minutes is past the median of IdentityMD's public list of requests on 10 October 2026 (14 minutes) and not past its slowest tenth (55 minutes and more), so `submit` can open before the oracle has answered. It is eleven and a half hours before the round can be closed. |
 | `ABANDON_AFTER_COMPLETED` | 30 minutes | Time left to hand in an answer whose callback did not run, counted from the first `abandon` call that sees the Intake's completion. |
-| `ABANDON_AFTER_SILENCE` | 12 hours | Any pending round can be closed by anyone after this, whatever the Intake says, so no feed can be stuck. About three times the longest delivery we have seen from the Intake's writer (below this table); half the day a house feed's answer is valid for; less than the 23 h 20 min between two daily requests. |
+| `ABANDON_AFTER_SILENCE` | 12 hours, followed by `validFor` + 5 minutes + 1 second | Time allowed for signing, followed by the full requested validity, signing-clock tolerance and inclusive-expiry boundary. House feeds can close after 36 h 5 min 1 s of silence. Completed requests keep the earlier thirty-minute recovery path. |
 | Back-off | cadence × 2^(failed rounds in a row), at most 2^5 = 32 (`MAX_BACKOFF_DOUBLINGS` = 5) | A feed whose question keeps failing spends its funders' IMD more and more slowly, and never stops asking altogether. One answer resets it. |
 | `GATE_GAS`, `GATE_DATA_MAX` | 100,000 gas, 68 bytes | The WHEN gate is one bounded static call with a selector and at most two words. |
 | `MAX_PANEL_SIZE` | 300 | The protocol's own upper limit for a panel. |
@@ -221,36 +222,30 @@ setter and no upgrade path. Each value is listed with the reason it has the valu
 | `validFor` range | 60 seconds to 30 days | The protocol's range for `validForSeconds`. |
 | Longest body | 16,384 bytes | The Intake's limit. |
 | Tip bound | a feed's tip is at most its `maxPrice` | A keeper is never paid more for asking than the feed pays for the answer. |
-| Tip rule | set aside at `request`, earned by an answer, returned to the meter when the round fails | Brief, section 12, decision 1: asking earns nothing by itself. |
+| Tip rule | set aside at `request`, earned by its opener when answered, returned to the meter on failure | An observer submitting a public signature cannot take the opener's tip. There is no separate reward for submission. |
 | Intake read gas | 50,000 per read | A bound, so an Intake getter that burns gas cannot keep a round from being closed. |
 | Share rescale | counts divided by 2^64 when a meter has more than 2^128 shares per wei | Keeps a long-lived meter's share count from overflowing. |
 
-**Why thirty minutes and twelve hours: what we saw on 13 October 2026.** The oracle decided each of
-our four proof requests within five minutes of admitting it (section 5), and its signed answers
-were public from then on. The Intake's writer, which puts an answer on chain and makes the
-callback, had completed none of the four when we last read the chain, two hours and forty minutes
-after the first purchase. The same day a request that another contract had made with a callback
-was completed a little over four hours after it was made (`docs/THREATS.md`, section 9). So the
-callback can be hours late while the signed answer is already public. Hence the two values.
-`submit` opens after thirty minutes, so that a daily feed's answer does not have to wait for the
-writer. And a round can be closed only after twelve hours, so that the writer has that long to
-deliver before anybody can close a round as failed; it matters most for an employers round, which
-nobody can hand an answer to. `test_waits_areTheValuesFixedAtLaunch` states the two values and
-`test_theWaitsFitTheHouseFeeds` holds them against the three feeds.
+**Timing after the launch audit.** The original twelve-hour closure could discard a valid
+house-feed answer while the Intake still reported an unfinished request. Silence now permits
+closure at `requestedAt + 12 hours + validFor + 5 minutes + 1 second`. The twelve hours allow
+for signing; the remaining time preserves the answer's requested validity, including clock skew
+and the fact that a signature is valid at `expiresAt`. For all three house feeds this is
+**36 hours, 5 minutes and 1 second**. `canAbandon` reports the actual deadline. The earlier path
+for a completed request remains thirty minutes after completion is first observed.
 
-What remains true with these values, which nobody can change after launch:
+`submit` still opens after thirty minutes for pinned chain-evidence feeds. It always credits the
+round's opener, including when somebody else buys a matching answer: the protocol's oracle UUID
+cannot be linked on chain to the Intake purchase id. There is no separate submission reward.
 
-- A round the Intake never serves blocks its feed for up to twelve hours: nobody can ask again
-  while it is pending. For payrolls and hires somebody can answer it through `submit` from thirty
-  minutes on. For employers nobody can.
-- The employers feed depends on the writer delivering within twelve hours. From then on anyone may
-  close the round, and its answer is refused when it comes.
-- A keeper should not close a round while IdentityMD's service shows its request as `completing`.
-  Nothing in the contract stops another caller once the twelve hours are up.
-- When the callback of a payrolls or hires round is more than thirty minutes late, the round's tip
-  goes to whoever hands the answer in first, which need not be the keeper that opened the round.
+A pending round still blocks new requests. The longer deadline can delay the next daily request;
+funders may withdraw unspent balances throughout. A response signed more than twelve hours after
+purchase or delivered after the full deadline can still be lost if somebody closes the round.
+No finite timeout can guarantee delivery from a service with unbounded delay. The employers feed
+still depends on the Intake callback because `submit` remains closed for panel evidence.
 
-These are limits Q3, Q4 and Q8 of `docs/THREATS.md`.
+Tests: `QuestionsLaunchAudit.t.sol`, `QuestionsAbandon.t.sol`,
+`test_employersAcceptsAValidDeliveryAfterTwelveHours` and `test_theWaitsFitTheHouseFeeds`.
 
 ### Payroll
 
@@ -699,7 +694,7 @@ Each request is a transaction of its own. Never batch two, and never send one th
 that also buys from the Intake in the same transaction: IdentityMD's service serves only the first
 request of a transaction. A request that is not served costs the meter 0.5 IMD, and its round
 stays open, with the feed unable to ask again, until somebody hands an answer in (payrolls and
-hires only, from thirty minutes after the request) or closes it (twelve hours after the request).
+hires only, from thirty minutes after the request) or closes it (36 h 5 min 1 s after the request).
 
 Send payrolls and hires so that they land in the same block (two transactions, consecutive nonces):
 their windows are then identical and every count is exact for its print's period.
@@ -725,7 +720,7 @@ come much later (on 13 October 2026 we saw one arrive four hours after its reque
 `https://api.imd.fun/intake/1/<transaction>` shows a request as `completing`, its answer exists and
 is on its way: do not close that round. A payrolls or hires answer does not have to wait for the
 writer: from thirty minutes after the request anyone may hand it in (section 7). An employers
-answer does have to wait, and the writer has twelve hours. To see an answer arrive:
+answer does have to wait, and the writer has the full silence deadline and its signed validity. To see an answer arrive:
 
 ```sh
 cast call $QUESTIONS "latest(bytes32)(uint256,uint64,uint64,uint64,uint64)" $PAYROLLS --rpc-url "$RPC"
@@ -762,12 +757,12 @@ caller's transaction reverts or does nothing.
 | About once an hour | `Payroll.drip()` | `stream()` returns `dueNow`; call when it is not zero. It is zero inside the ten-minute gap and while sIMD has no stakers, the two cases in which the call would revert. An hourly drip keeps pace with vesting. |
 | When IMD reached Payroll by plain transfer | `Payroll.book()` | `unbooked()` says how much is waiting. |
 | When Payroll's position on a meter is below its runway, and at least once a fortnight | `Payroll.fundFeeds()` | `feedShortfalls()` says what each meter would be offered. This is also the only call that releases feed budget whose wait is over, after it has served the meters: `feedBudget()` shows that amount as `releasableNow`. |
-| Thirty minutes after a payrolls or hires request, if its answer has not been stored | `Questions.submit(feedId, attestation, signature)` | `canSubmit` returns true. Hands in the oracle's signed answer without waiting for the Intake's writer; see below this table. The caller earns the round's tip. |
-| When a round will not be answered | `Questions.abandon(feedId)` | `canAbandon` returns the step: 1 means a first call that only starts a 30-minute wait, 2 means the call closes the round. Twelve hours after the request, and not before, one call always closes it. Not while the Intake's service still shows the request as `completing`: an answer that arrives after the round was closed is refused. |
+| Thirty minutes after a payrolls or hires request, if its answer has not been stored | `Questions.submit(feedId, attestation, signature)` | `canSubmit` returns true. Hands in the oracle's signed answer without waiting for the Intake's writer; see below this table. The opener keeps the round's tip. |
+| When a round will not be answered | `Questions.abandon(feedId)` | `canAbandon` returns the step: 1 means a first call that only starts a 30-minute wait, 2 means the call closes the round. 36 h 5 min 1 s after the request, and not before, one call always closes it. Not while the Intake's service still shows the request as `completing`: an answer that arrives after the round was closed is refused. |
 | When it likes | `Questions.collectTips()` | Pays the caller the tips it has earned. `tipsOf(address)` shows earned and pending. |
 
 A round the Intake completed without an answer (refused, or the panel did not agree) takes two
-`abandon` calls thirty minutes apart, or one call twelve hours after the request. After a failed
+`abandon` calls thirty minutes apart, or one call 36 h 5 min 1 s after the request. After a failed
 round the feed waits twice as long before it may ask again, four times after two in a row, up to
 32 times; the first answer puts the cadence back.
 
@@ -775,9 +770,8 @@ A payrolls or hires round does not have to wait for the Intake's writer, and a r
 never served can be rescued instead of abandoned. Thirty minutes after the request
 `canSubmit(feedId)` turns true, and anyone who holds an answer the oracle signed for `Questions` to
 the round's question can hand it in with `submit(feedId, attestation, signature)`. That answers the
-round, leaves the cadence as it was, and earns that caller the round's tip, whoever opened the
-round. A keeper that wants the tip of a round it opened hands the answer in itself as soon as
-`canSubmit` is true. There are two cases:
+round, leaves the cadence as it was, and credits the opener's tip. Anyone may help deliver the
+answer; the submission itself has no separate reward. There are two cases:
 
 - *The request was served and the writer is late.* The Intake read of section 5 shows the request
   as `completing` and names the oracle request (`admission.result.requestId`);
@@ -794,12 +788,14 @@ round. A keeper that wants the tip of a round it opened hands the answer in itse
 
 That exists for payrolls and hires only. The employers feed is judged by a panel, and `Questions`
 refuses `submit` for such a feed: only the Intake's own callback can answer its rounds, and it has
-twelve hours. An employers round that is not delivered in that time can be closed by anyone; it
+the full silence deadline and its signed validity. An employers round that is not delivered in that time can be closed by anyone; it
 then fails, costs its meter the price, and doubles the feed's wait.
 
-Seat owners and their agents are paid on request, by anyone, to whoever owns the seat at that
-moment: `Payroll.claimSeat(tokenId)`, `claimSeats(tokenIds)` (at most 200 ids per call) and
-`claimTip(agentId)`. A seat owner should claim before moving a seat into another contract.
+Seat owners and their agents are paid to whoever owns the seat at the moment of the claim: `Payroll.claimSeat(tokenId)`, `claimSeats(tokenIds)` (at most 200 ids per call) and
+`claimTip(agentId)`. Anyone may initiate claims for an ordinary wallet. A contract holding a
+seat must initiate its own claims, except that anyone may recycle Payroll's own share. Batch
+claims skip other contract holders. A passive escrow leaves the funds owed until the seat moves
+to a holder that can claim; claims never select an arbitrary recipient.
 
 ## 8. What can go wrong on the day, and what happens then
 
@@ -808,9 +804,9 @@ moment: `Payroll.claimSeat(tokenId)`, `claimSeats(tokenIds)` (at most 200 ids pe
 | Nobody creates a feed | `fund` reverts for that feed, Payroll skips it (`costOf` is zero), the report stays empty. Payroll's feed budget waits 14 to 28 days and then goes to stakers. Nothing is lost. |
 | A feed's body is refused by the oracle, or its panel does not agree | Each request costs its meter 0.5 IMD and the round fails. The back-off slows the spending. Funders can take the rest out at any time. Section 5 found this out for the first employers body before launch, for 0.5 IMD. |
 | The employers feed never answers | The Jobs Report is unaffected. Its meter holds at most 2.2 IMD of Payroll's budget at a time. Its rounds cannot be rescued with `submit`. |
-| The Intake's writer delivers an answer hours late | The round stays pending and the answer is stored when it comes, as long as nobody has closed the round: anyone may, twelve hours after the request. For payrolls and hires anyone can hand the answer in from thirty minutes on instead. |
-| The Intake's writer is more than twelve hours late with an employers answer | Anyone may close the round. The answer is then refused when it comes, the meter has paid for it, and the feed waits two cadences before it asks again. No `submit` can make up for it. |
-| The service never serves a request | The feed cannot ask again while the round is pending. A payrolls or hires round can be answered through `submit` from thirty minutes on; any round can be closed twelve hours after the request. |
+| The Intake's writer delivers an answer hours late | The round stays pending and the answer is stored when it comes, as long as nobody has closed the round: anyone may, 36 h 5 min 1 s after the request. For payrolls and hires anyone can hand the answer in from thirty minutes on instead. |
+| The Intake's writer is later than the full silence deadline with an employers answer | Anyone may close the round. The answer is then refused when it comes, the meter has paid for it, and the feed waits two cadences before it asks again. No `submit` can make up for it. |
+| The service never serves a request | The feed cannot ask again while the round is pending. A payrolls or hires round can be answered through `submit` from thirty minutes on; any round can be closed 36 h 5 min 1 s after the request. |
 | Nobody calls `fundFeeds` | Payroll's positions on the meters are not topped up, and feed budget whose wait is over stays in Payroll. Nothing is lost: the first call does both. |
 | The Intake's price rises above 2 IMD | Requests stop (`canRequest` says price above the cap) until it falls. Meters stay redeemable. |
 | IdentityMD rotates the oracle signer or replaces the Intake | No new answer is accepted. Rounds fail and back off; meters stay redeemable; Payroll's other functions are unaffected. The three contracts must be launched again to resume the feeds. |

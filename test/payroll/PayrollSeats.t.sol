@@ -66,23 +66,16 @@ contract PayrollSeatsTest is PayrollSetup {
         assertEq(payroll.seatClaimable(SEAT_COUNT), 0);
     }
 
-    /// @dev Reviewers' note, kept as a test of documented behaviour: a claim pays `ownerOf` as it is
-    /// during the call and anyone may call. So while a seat sits in another contract (an escrow, a
-    /// marketplace, a loan), anyone can have its whole accrued share paid to that contract; the owner
-    /// who gets the seat back finds nothing left to claim. The NatSpec of `claimSeat`, `claimSeats`
-    /// and `claimTip` says so: claim before moving a seat.
-    function test_claimSeat_paysWhateverHoldsTheSeatAtThatMoment() public {
+    /// @dev An ordinary wallet can still be paid by a keeper while it owns the seat.
+    function test_claimSeat_paysTheCurrentWalletOwner() public {
         uint256 seat = 42;
         address owner = seats.ownerOf(seat);
-        assertEq(payroll.seatClaimable(seat), PER_SEAT);
-
-        address escrow = makeAddr("an escrow contract");
-        seats.setOwner(seat, escrow);
+        address buyer = makeAddr("temporary wallet owner");
+        seats.setOwner(seat, buyer);
         vm.prank(makeAddr("anyone"));
         payroll.claimSeat(seat);
         seats.setOwner(seat, owner);
-
-        assertEq(imd.balanceOf(escrow), PER_SEAT);
+        assertEq(imd.balanceOf(buyer), PER_SEAT);
         assertEq(imd.balanceOf(owner), 0);
         assertEq(payroll.seatClaimable(seat), 0);
     }

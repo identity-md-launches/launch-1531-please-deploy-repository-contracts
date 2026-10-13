@@ -27,12 +27,12 @@ interface IPayroll {
     /// @notice Moves the due part of the staker stream into sIMD. Anyone may call.
     function drip() external returns (uint256 sent);
 
-    /// @notice Pays a seat's share of the seat pool to whoever owns the seat now. Anyone may call.
+    /// @notice Pays the current seat owner. A contract owner must initiate its claim, except Payroll itself.
     function claimSeat(uint256 tokenId) external returns (uint256 paid);
 
     function claimSeats(uint256[] calldata tokenIds) external returns (uint256 paid);
 
-    /// @notice Pays an agent's tips to the owner of the seat the agent is bound to. Anyone may call.
+    /// @notice Pays the bound seat's owner. A contract owner must initiate its claim, except Payroll itself.
     function claimTip(uint256 agentId) external returns (uint256 paid);
 
     function seatClaimable(uint256 tokenId) external view returns (uint256);

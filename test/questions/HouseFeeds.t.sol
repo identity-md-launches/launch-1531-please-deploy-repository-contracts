@@ -260,70 +260,43 @@ contract HouseFeedsTest is QuestionsFixture {
         assertFalse(q.canSubmit(feedId));
     }
 
-    /// @notice What the employers feed depends on: the Intake's writer delivering within twelve
-    /// hours. Until they are up nobody can close its round, and the callback stores the answer
-    /// however late it comes. From then on anyone may close it, and an answer that comes afterwards
-    /// is refused. Nobody can hand the answer in at either moment.
-    function test_employersDependsOnTheWriterDeliveringWithinTwelveHours() public {
+    /// @notice The imported audit's twelve-hour grief no longer discards a valid house-feed answer.
+    function test_employersAcceptsAValidDeliveryAfterTwelveHours() public {
         HouseFeed memory h = _load("employers");
         bytes32 feedId = q.createFeed(h.params, h.qPrefix, h.tail);
         vm.roll(vm.parseJsonUint(h.json, ".example.requestBlock"));
         _fund(alice, feedId, 10e18);
         bytes32 intakeId = _request(feedId);
         uint256 askedAt = vm.getBlockTimestamp();
-
-        // The oracle signs five minutes after the request; the answer is valid for a day.
         skip(5 minutes);
         address[] memory three = new address[](3);
         (three[0], three[1], three[2]) = (address(0xA1), address(0xB2), address(0xC3));
         OracleAttestation.Attestation memory a = _attestation(feedId, abi.encode(three));
         bytes memory signature = _sign(a);
-        assertGt(a.expiresAt, askedAt + abandonAfterSilence, "the answer expires before the round can be closed");
-
-        // One second before the twelve hours are up: the round cannot be closed, the answer
-        // cannot be handed in, and the writer's delivery is stored.
-        skip(abandonAfterSilence - 5 minutes - 1);
-        assertEq(vm.getBlockTimestamp(), askedAt + abandonAfterSilence - 1);
+        vm.warp(askedAt + 12 hours);
         vm.expectRevert(abi.encodeWithSelector(Questions.TooEarlyToAbandon.selector, askedAt + abandonAfterSilence));
         vm.prank(bob);
         q.abandon(feedId);
         vm.expectRevert(Questions.SubmitNotForPanelEvidence.selector);
         q.submit(feedId, a, signature);
-        uint256 snapshot = vm.snapshotState();
-        assertTrue(_complete(intakeId, a, signature), "a delivery inside the twelve hours was refused");
+        vm.warp(a.expiresAt);
+        assertTrue(_complete(intakeId, a, signature), "delivery at signed expiry was refused");
         (uint256 value,,, uint64 round,) = q.latest(feedId);
         assertEq(round, 1);
         assertEq(value, uint256(keccak256(abi.encode(three))));
-
-        // At twelve hours anyone may close it. The same delivery then comes too late, and
-        // `submit` is as closed as before.
-        vm.revertToState(snapshot);
-        skip(1);
-        assertEq(vm.getBlockTimestamp(), askedAt + abandonAfterSilence);
-        vm.prank(bob);
-        assertTrue(q.abandon(feedId));
-        assertFalse(_complete(intakeId, a, signature), "an answer was stored for a round that was closed");
-        (,,, round,) = q.latest(feedId);
-        assertEq(round, 0);
-        assertEq(q.feedState(feedId).failStreak, 1);
-        vm.expectRevert(Questions.SubmitNotForPanelEvidence.selector);
-        q.submit(feedId, a, signature);
+        assertEq(q.feedState(feedId).failStreak, 0);
     }
 
-    /// @notice The waits against the three house feeds as they are launched. An answer stays valid
-    /// for longer than silence can keep a round open, so one signed minutes after the request has
-    /// not expired when the round can first be closed. A round can be closed before its feed is
-    /// next due, so a round that ends at the last moment does not make the next request late. And
-    /// `submit` opens long before a round can be closed.
+    /// @notice Silence allows twelve hours to sign, then the full requested validity and clock skew.
     function test_theWaitsFitTheHouseFeeds() public view {
         string[3] memory names = _names();
         for (uint256 i; i < names.length; ++i) {
             Questions.FeedParams memory p = _load(names[i]).params;
-            assertGt(p.validFor, abandonAfterSilence, names[i]);
-            // Twelve seconds a block.
-            assertGt(uint256(p.cadenceBlocks) * 12, abandonAfterSilence, names[i]);
+            uint256 timeout = q.ABANDON_AFTER_SILENCE() + p.validFor + q.ISSUED_AT_TOLERANCE() + 1;
+            assertEq(timeout, 36 hours + 5 minutes + 1, names[i]);
+            assertGt(timeout, p.validFor, names[i]);
+            assertLt(submitAfterSilence, timeout, names[i]);
         }
-        assertLt(submitAfterSilence, abandonAfterSilence);
     }
 
     /// @notice The hires feed counts every Transfer log to the fee payee, zero-value ones included,

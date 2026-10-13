@@ -280,7 +280,7 @@ contract QuestionsIntakeForkTest is Test {
     }
 
     /// @notice `abandon` and `submit` read the live Intake's `requests` getter the way it is laid out
-    /// on chain: not completed means twelve hours, and no `submit` for the first thirty minutes;
+    /// on chain: not completed means the full silence deadline, and no `submit` for the first thirty minutes;
     /// completed with no answer opens `submit` at once and lets the round be closed thirty minutes
     /// after `abandon` first saw it.
     function test_fork_abandonReadsTheLiveIntake() public {
@@ -295,7 +295,7 @@ contract QuestionsIntakeForkTest is Test {
         vm.prank(keeper);
         bytes32 intakeId = q.request(feedId);
         uint256 askedAt = vm.getBlockTimestamp();
-        uint256 silence = q.ABANDON_AFTER_SILENCE();
+        uint256 silence = q.ABANDON_AFTER_SILENCE() + p.validFor + q.ISSUED_AT_TOLERANCE() + 1;
         bytes memory tooEarly = abi.encodeWithSelector(Questions.TooEarlyToAbandon.selector, askedAt + silence);
 
         // The live Intake reports the request as not completed. To the last second of the thirty
@@ -306,7 +306,7 @@ contract QuestionsIntakeForkTest is Test {
         q.abandon(feedId);
 
         // Had the writer stayed silent: `submit` opens at thirty minutes by the clock alone, and
-        // the round can be closed at twelve hours and not one second sooner.
+        // the round can be closed at the full silence deadline and not one second sooner.
         uint256 snapshot = vm.snapshotState();
         skip(1);
         assertTrue(q.canSubmit(feedId), "thirty minutes of silence did not open submit");
@@ -314,7 +314,7 @@ contract QuestionsIntakeForkTest is Test {
         vm.expectRevert(tooEarly);
         q.abandon(feedId);
         skip(1);
-        assertTrue(q.abandon(feedId), "twelve hours of silence did not let the round be closed");
+        assertTrue(q.abandon(feedId), "the full silence deadline of silence did not let the round be closed");
         vm.revertToState(snapshot);
         assertFalse(q.canSubmit(feedId));
 

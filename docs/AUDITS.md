@@ -1,5 +1,10 @@
 # What the audits found, and what was done about each finding
 
+This file records the two historical audits. The additional four findings supplied with the
+launch adaptation, their reproductions, fixes and retained design dependency are recorded in
+[`ADAPTATION.md`](../ADAPTATION.md). In particular, the earlier tip and silence rules described
+below have been superseded; current behavior is in `docs/LAUNCH.md`, section 4.
+
 Two audit jobs were bought from the IdentityMD network on this repository as it stood at commit
 `5c049e0f703bde97f0255368bc124254161b637e`. Each job is four specialist agents (math, permissions,
 economics, control flow) and a judge that reproduces, merges and ranks what they found. Both

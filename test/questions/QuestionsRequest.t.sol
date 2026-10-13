@@ -786,7 +786,7 @@ contract QuestionsRequestTest is QuestionsFixture {
     /// never served. The caller is paid nothing for it: the tip is only set aside, and when the
     /// round is closed it goes back onto the meter. The caller's cost is a whole Intake price of
     /// its own; the meter's is one price. If nobody does anything about it, the round can only be
-    /// closed twelve hours later, and the feed then waits two cadences.
+    /// closed after the full silence deadline, and the feed then waits two cadences.
     function test_request_afterTheCallersOwnIntakeRequest_isNeverServedAndEarnsTheCallerNothing() public {
         (BundledAsker bundle,) = _unservedRound();
         uint256 askedAt = vm.getBlockTimestamp();
@@ -801,7 +801,7 @@ contract QuestionsRequestTest is QuestionsFixture {
         assertEq(uint8(_status(feedId, 1)), uint8(IQuestions.RoundStatus.Pending));
 
         // The Intake never completes it. Nobody can ask again while it is pending, and it cannot
-        // be closed until twelve hours have passed.
+        // be closed until the full silence deadline has passed.
         vm.roll(askedBlock + 10 * uint256(CADENCE));
         skip(abandonAfterSilence - 1);
         _assertBlocked(feedId, Questions.Blocker.RoundPending);
@@ -836,7 +836,7 @@ contract QuestionsRequestTest is QuestionsFixture {
     /// @notice What can be done about it: thirty minutes after the request, anyone who has bought
     /// the same question from the oracle for this contract hands the answer in. The round is answered,
     /// the cadence is not doubled, and the feed asks again when it would have anyway. The tip goes
-    /// to the one who brought the answer, not to the caller that left the round unserved.
+    /// to the opener: the protocol cannot identify which purchase produced a matching attestation.
     function test_request_anUnservedRoundCanBeAnsweredThroughSubmit() public {
         (BundledAsker bundle,) = _unservedRound();
         uint256 askedAt = vm.getBlockTimestamp();
@@ -863,11 +863,11 @@ contract QuestionsRequestTest is QuestionsFixture {
         assertEq(v.failStreak, 0);
         assertEq(v.nextRequestBlock, askedBlock + CADENCE);
         (uint256 earned, uint256 pending) = q.tipsOf(address(bundle));
-        assertEq(earned + pending, 0, "the caller that left the round unserved was credited");
-        (earned, pending) = q.tipsOf(bob);
-        assertEq(earned, TIP);
+        assertEq(earned, TIP, "the opener keeps the tip for an answered round");
         assertEq(pending, 0);
-        vm.prank(bob);
+        (earned, pending) = q.tipsOf(bob);
+        assertEq(earned + pending, 0);
+        vm.prank(address(bundle));
         assertEq(q.collectTips(), TIP);
         assertEq(q.totalTips(), 0);
         assertEq(imd.balanceOf(address(q)), q.totalMetered());

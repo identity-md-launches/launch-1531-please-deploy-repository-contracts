@@ -24,13 +24,12 @@ feeds funded.
   stream that claimed more than the code gives). Left: one info finding, and the other medium
   finding, which is acknowledged and not closed: a visitor that stakes in sIMD just before a drip
   takes a staker's share of it (`docs/THREATS.md`, P2). The fixes have not been audited again.
-- **Two waits in `Questions` were changed after the audits, on 13 October 2026.** `submit` opens
-  thirty minutes after a request the Intake has not completed (the auditors read two hours), and
-  anyone may close a pending round twelve hours after its request (they read six). The reason is
-  what was seen that day: the oracle signs within minutes and the Intake's writer can deliver
-  hours later. What remains true: a round the Intake never serves blocks its feed for up to twelve
-  hours, and the employers feed depends on the writer delivering within twelve hours
-  (`docs/THREATS.md`, Q8; `docs/AUDITS.md`, last section). Not audited.
+- **The launch adaptation reproduced the supplied audit.** `submit` now preserves the opener's
+  tip. Silent rounds wait twelve hours plus their requested answer validity, five minutes of
+  clock tolerance, and one second before anyone can close them (36 h 5 min 1 s for house feeds).
+  Contract-held seats require their holder to initiate claims, except Payroll's own recycling.
+  The fixed signer remains a dependency of the requested ownerless design. See `ADAPTATION.md`
+  for the findings, regressions, remaining limits and final build measurements.
 - **Oracle answers in the tests are signed by a test key**, with these exceptions. The three real
   answers to the house feeds, with the oracle signer's real signatures, are stored by the real
   callback (`test/questions/HouseFeedProofs.t.sol`). Of 23 other real attested requests saved as
@@ -55,7 +54,8 @@ forge build --sizes
 forge test
 ```
 
-`forge test` runs 491 tests in 46 suites and needs no network. It skips the fork tests.
+`forge test` runs the unit, fuzz, invariant, integration and launch suites without a network.
+It skips the fork tests. Final adaptation results are in `ADAPTATION.md`.
 
 ```sh
 FOUNDRY_PROFILE=fork forge test
@@ -71,7 +71,7 @@ sIMD's refusal to let a holder leave in the block it staked in.
 slither . --filter-paths "lib|test"
 ```
 
-reports no finding of high or medium impact (Slither 0.11.4). Its 20 low findings and the eleven
+reported no finding of high or medium impact on the pre-adaptation code (Slither 0.11.4). Its 20 low findings and the eleven
 places where the source silences a detector are explained one by one in `docs/THREATS.md`, section 8.
 
 The compiler settings are the ones a launch requires and are in `foundry.toml`: solc 0.8.26, EVM
@@ -86,8 +86,9 @@ A full build takes a few minutes because of `via_ir`.
 | `JobsReport` | `src/payroll/JobsReport.sol` | 9,320 | 9,618 | No |
 | `Payroll` | `src/payroll/Payroll.sol` | 11,715 | 12,429 | Fees until they are paid out |
 
-The limits are 24,576 bytes of runtime code and 49,152 of initcode; our own gates are 23,000 and
-46,000, and a test fails above them. `Questions` is 37 bytes under our gate.
+The table records the pre-adaptation build. Final measured sizes are in `ADAPTATION.md`.
+The limits are 24,576 bytes of runtime and 49,152 of initcode; our own gates remain 23,000 and
+46,000, enforced by the launch tests.
 
 Supporting code: `src/questions/OracleAttestation.sol` is IdentityMD's library and base contract,
 copied unchanged. `src/questions/QuestionBody.sol` builds a request body and the question hash an
@@ -109,9 +110,9 @@ contract imports it.
 4. The oracle's signed answer comes back through the Intake's callback. `Questions` checks the
    signature, the question hash, the window, the panel and the closing block's hash, stores the
    answer as one word, and the tip becomes the keeper's. When the callback has not come thirty
-   minutes after the request, anyone may hand the signed answer in with `submit` and is paid the
-   tip (not for a feed a panel judges). A round that gets no answer is closed by `abandon`, twelve
-   hours after the request at the latest; its tip goes back to the meter and the feed waits longer
+   minutes after the request, anyone may hand the signed answer in with `submit`; the opener
+   keeps the tip (panel-evidence feeds still require the callback). A silent round can be closed
+   by `abandon` after twelve hours plus its `validFor`, five minutes, and one second; its tip goes back to the meter and the feed waits longer
    before asking again.
 5. Anyone calls `JobsReport.print`, which copies answered rounds of the "payrolls" and "hires"
    feeds into a public record: one print per day, a running total, a best day and a streak.
@@ -123,7 +124,8 @@ contract imports it.
 
 ## Every entry point
 
-No function in any of the three contracts is restricted to an owner or an admin: there is none.
+There is no contract owner or admin. A contract holding a seat must initiate its own claims,
+except that anyone may recycle Payroll's own share. Other wallet claims remain permissionless.
 "Anyone" below means any account or contract. Every function that moves IMD holds one
 transient-storage lock per contract, so a nested call into the same contract reverts
 `ReentrancyGuardReentrantCall`.
@@ -142,8 +144,8 @@ function that is not in its table, a payable function, a `receive` or a fallback
 | `defund(feedId, shares)` | A holder of shares | Burns shares and pays the caller their part of the unspent meter. More shares than held means all of them. Never blocked by the feed's state. | `NothingToDefund`: the caller holds no shares of this meter. |
 | `request(feedId)` | Anyone | Buys the feed's next answer from the Intake with the meter's IMD. Sets the tip aside for the caller. | `RequestBlocked(why)`: unknown feed, a second request in one transaction, a round pending, too soon, no blocks yet, gate closed, action not sold, price above the feed's cap, or meter too low. `PriceNotTaken`, `RequestIdReused`, `MetersNotCovered` if the Intake misbehaves. |
 | `onOracleResult(requestId, attestation, signature)` | **The Intake only** | Stores the oracle's answer for the pending round and credits the tip to the keeper that opened it. | `NotTheIntake`; `UnknownRequest`; the attestation is expired, not yet valid, not signed by the oracle signer for this contract, already used by this feed, or does not match the round's chain, question hash, window, answer type, panel, quorum, agreement or closing block hash; `MalformedAnswer`. |
-| `submit(feedId, attestation, signature)` | Anyone | Hands in an answer the callback missed or has not brought. The tip goes to the caller. Closed for a feed a panel judges, the employers house feed among them. | `UnknownFeed`; `SubmitNeedsPinnedQuestion`; `SubmitNotForPanelEvidence`; `NoPendingRound`; `SubmitTooEarly(opensAt)` until the Intake has completed the round's request or thirty minutes have passed since it; then every check of the callback. |
-| `abandon(feedId)` | Anyone | Closes a pending round that will not be answered and returns its tip to the meter. Returns `false` when the call only started the thirty-minute wait. | `UnknownFeed`; `NoPendingRound`; `TooEarlyToAbandon(notBefore)` until twelve hours after the request, or thirty minutes after the first call that found the Intake's request completed. |
+| `submit(feedId, attestation, signature)` | Anyone | Hands in an answer the callback missed or has not brought. The tip stays with the opener. Closed for a feed a panel judges, the employers house feed among them. | `UnknownFeed`; `SubmitNeedsPinnedQuestion`; `SubmitNotForPanelEvidence`; `NoPendingRound`; `SubmitTooEarly(opensAt)` until the Intake has completed the round's request or thirty minutes have passed since it; then every check of the callback. |
+| `abandon(feedId)` | Anyone | Closes a pending round that will not be answered and returns its tip to the meter. Returns `false` when the call only started the thirty-minute wait. | `UnknownFeed`; `NoPendingRound`; `TooEarlyToAbandon(notBefore)` until the full silence deadline (request + 12 h + `validFor` + 5 min + 1 s), or thirty minutes after the first call that found the Intake's request completed. |
 | `collectTips()` | Anyone | Pays the caller the tips it has earned. Pays nothing, without reverting, when none are earned. | Only if the token transfer fails. |
 | `reveal(feedId, round, answer)` | Anyone | Publishes, in an event, the list behind a list-typed round. Stores nothing. | `NothingToReveal`; `WrongAnswerBytes`. |
 
@@ -175,9 +177,9 @@ Views: `printCount`, `printAt`, `latestPrint`, `printsPage`, `latestPrints`, `co
 | `book()` | Anyone | Books IMD that arrived by plain transfer, split the same way. Returns the amount, zero when nothing new arrived. | Only if the token's balance cannot be read. |
 | `tip(agentIds, amount)` | Anyone, having approved `amount` | Pulls IMD and credits it equally to the first 16 ids; the remainder, or everything for an empty list, joins the seat pool. | Only if the token transfer fails. |
 | `drip()` | Anyone | Sends the vested part of the stakers' stream to sIMD by plain transfer, at most one hour of stream per call. Whoever holds sIMD at that moment shares it. Returns zero when nothing has vested. | `DripTooSoon(notBefore)` inside ten minutes of the last drip; `StakingVaultNotReady` when sIMD does not answer as a vault over IMD with shares outstanding. `stream().dueNow` is zero in both cases. |
-| `claimSeat(tokenId)` | Anyone | Pays a seat's share of the seat pool to whoever owns the seat now. | `UnknownSeat`; `SeatHasNoOwner`. |
-| `claimSeats(tokenIds)` | Anyone | The same for a list of at most 200 ids. Skips what it cannot pay. | `TooManySeats`. |
-| `claimTip(agentId)` | Anyone | Pays an agent's tips to the owner of the seat the agent is bound to. | `AgentNotBound`; `AgentBoundElsewhere`; `SeatHasNoOwner`; `GasTooLow`. |
+| `claimSeat(tokenId)` | Anyone for wallets; the holder for contract-owned seats (except Payroll) | Pays a seat's share of the seat pool to whoever owns the seat now. | `UnknownSeat`; `SeatHasNoOwner`; `ContractOwnerMustClaim`. |
+| `claimSeats(tokenIds)` | Anyone | The same for a list of at most 200 ids. Skips what it cannot pay, including other contract owners. | `TooManySeats`. |
+| `claimTip(agentId)` | Same caller rule as `claimSeat` | Pays an agent's tips to the owner of the seat the agent is bound to. | `AgentNotBound`; `AgentBoundElsewhere`; `SeatHasNoOwner`; `ContractOwnerMustClaim`; `GasTooLow`. |
 | `sweepTip(agentId)` | Anyone | Moves the part of an agent's tips that has waited 180 to 360 days, and still cannot be claimed, to the seat pool. | `TipNotSweepableYet(agentId, notBefore)`; `TipStillClaimable`; `GasTooLow`. |
 | `fundFeeds()` | Anyone | Tops Payroll's own position on each of the three house feeds' meters up to its runway from the feed budget, then releases to the stakers' stream the budget whose wait of 14 to 28 days is over. The only function that releases feed budget. | `FeedOverdrawn`, only if more IMD left than was approved. A failure inside `Questions` does not revert it. |
 
@@ -231,7 +233,7 @@ Other calls, each printed by the named test with `-vv`:
 | `Payroll.claimSeats`, 20 real seats, mainnet fork | 49,342 a seat | `test_fork_gasOfSeatClaimsAgainstTheRealContracts` |
 | The live Adapter's `bindingOf`, mainnet fork | 13,236 | `test_fork_tipFollowsTheRealAdapterBinding` |
 
-The figures are as Foundry 1.8.3 prints them with its default settings on the day of the run (13
+These pre-adaptation figures are as Foundry 1.8.3 printed them with its default settings on the day of the run (13
 October 2026, after a full rebuild); the Payroll and JobsReport rows use stand-ins for IMD, sIMD,
 the seat token and the Adapter, and the fork rows use the real contracts.
 

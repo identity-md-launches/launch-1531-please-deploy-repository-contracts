@@ -74,8 +74,8 @@ failure call can run out of gas or never come."
 
 **What we do.** `Questions` is launched against version 2 and asks with plain `request`, as it would
 against version 1. It names no failure function and has no `onOracleFailure`. Every pending round
-has a deadline instead: `abandon` closes it twelve hours after the request whatever the Intake
-says, or thirty minutes after the Intake's completion of the request was first seen with nothing
+has a deadline instead: `abandon` closes it after the request plus twelve hours, the feed's
+`validFor`, five minutes of clock tolerance and one second, or thirty minutes after the Intake's completion of the request was first seen with nothing
 stored. Anyone may call it, not only the requester. And for the two daily feeds anyone may `submit`
 the answer the callback missed or has not brought, from thirty minutes after the request.
 
@@ -85,26 +85,25 @@ the answer the callback missed or has not brought, from thirty minutes after the
   request whose panel did not agree are completed by the Intake with status 1 or 2; `abandon` reads
   that completion from `Intake.requests(id)` (the fourth field, `completed`, which version 2 keeps
   exactly as version 1 had it) and closes the round. A request that is never completed is closed
-  by the twelve-hour rule, which a failure call could not replace: the guidance itself says the
+  by the full silence deadline, which a failure call could not replace: the guidance itself says the
   deadline is still needed.
 - The failure call is unsigned. The guidance: "the values are unsigned: never move money on them",
   and "until failures are signed, `reason`, `agreed` and `answered` are the writer's word". Closing
   a round returns its tip to the meter and doubles the feed's wait, and a failure call acted on at
   once would do both the moment the writer said so. `abandon` gives the writer's word less: its
   completion of a request starts thirty minutes in which, for the daily feeds, anyone can still
-  hand in the real answer, and only then may the round be closed; the twelve-hour rule needs
+  hand in the real answer, and only then may the round be closed; the full silence deadline needs
   nobody's word at all.
-- There is no room for it. `Questions` is 22,963 bytes against our own gate of 23,000. A second
-  entry point for the Intake, with its sender check, its lookup and its event, does not fit in 37
-  bytes, and we would not trade a view or a check away for a message `abandon` does not need.
+- The original build was 22,963 bytes against our gate of 23,000. A second entry point
+  for the Intake adds a sender check, lookup and event, and we would not trade a view or a check away for a message `abandon` does not need.
 - The flag in the reference is owner-set, and there is no owner (D1).
 
-**What it costs.** A refused or unanswered request is noticed thirty minutes to twelve hours later
-instead of at once. On a house feed that changes nothing, because the back-off after a failed
-round, two cadences, is longer than that. The deadline is as long as twelve hours because the
-Intake's writer can deliver an answer hours late, and a round closed before its answer comes has
-lost it (`docs/THREATS.md`, Q8). Nobody is told the reason on chain; it is in the Intake's
-`Completed` event and in IdentityMD's API.
+**What it costs.** A refused or unanswered request needs an `abandon` call to notice it.
+The house feeds' full silence deadline is now 36 h 5 min 1 s, following the launch audit; the
+extra time preserves a timely signed answer's validity. Pending rounds can delay the next daily
+request. An oracle signing later than the twelve-hour allowance, or a writer missing the full
+deadline, can still lose an answer after closure (`docs/THREATS.md`, Q8). Nobody is told the
+failure reason on chain here; it is in the Intake's event and the service's API.
 
 **Shown by.** `test_fork_houseFeedBuysARealRequestAndTakesTheCallback` (after our request the live
 version 2 Intake holds no failure selector for it), `test_fork_abandonReadsTheLiveIntake` (the
@@ -165,10 +164,10 @@ answer the oracle has signed that the Intake's writer is late to deliver: on 13 
 oracle answered within minutes and the writer was hours behind it (`docs/THREATS.md`, Q8).
 
 **What it costs.** See `docs/THREATS.md`, Q3 and Q4: thirty minutes can be less than the oracle
-itself takes, and the tip of a round whose callback is late goes to whoever hands the answer in
-first. One of the three house feeds pays the second condition's price: the employers feed is
+itself takes. The opener now keeps the tip even when another account submits, including a
+separately purchased matching answer: no on-chain field links its oracle UUID to the Intake id. One of the three house feeds pays the second condition's price: the employers feed is
 judged by a panel (D10), so no answer to it can ever be handed in, and a round whose callback is
-missed, or comes more than twelve hours after the request, fails.
+missed or comes after closure at the full silence deadline fails.
 
 ## D6. The question hash is built on chain from a rule we reconstructed
 

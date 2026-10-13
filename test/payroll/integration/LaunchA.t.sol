@@ -272,7 +272,7 @@ contract LaunchAIntegrationTest is QuestionsFixture {
         _request(payrollsFeed);
         _answer(hiresFeed, abi.encode(uint256(90)));
         // Twelve hours of silence, at twelve seconds a block.
-        _advance(abandonAfterSilence / 12);
+        _advance((abandonAfterSilence + 11) / 12);
         q.abandon(payrollsFeed);
         (printed, counted) = report.print();
         assertEq(printed, 0);
@@ -432,7 +432,7 @@ contract LaunchAIntegrationTest is QuestionsFixture {
         // Nobody asks for four days (28,800 blocks). Then a failed round, then two answered ones.
         _advance(28_800);
         _request(payrollsFeed);
-        _advance(abandonAfterSilence / 12);
+        _advance((abandonAfterSilence + 11) / 12);
         q.abandon(payrollsFeed);
         _answerWhenDue(payrollsFeed, 150e18);
         _answerWhenDue(payrollsFeed, 120e18);

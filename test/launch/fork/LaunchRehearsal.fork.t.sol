@@ -389,10 +389,10 @@ contract LaunchRehearsalForkTest is LaunchKit {
         assertEq(IMD.balanceOf(address(q)), q.totalMetered() + q.totalTips());
         assertEq(IMD.allowance(address(q), Mainnet.INTAKE), 0);
 
-        // Nobody answers. One second before the twelve hours are up the round cannot be closed;
-        // at twelve hours anyone closes it and the tip is back on the meter.
+        // Nobody answers. One second before the the full silence deadline are up the round cannot be closed;
+        // at the full silence deadline anyone closes it and the tip is back on the meter.
         uint256 askedAt = vm.getBlockTimestamp();
-        uint256 silence = q.ABANDON_AFTER_SILENCE();
+        uint256 silence = q.ABANDON_AFTER_SILENCE() + q.feedParams(feeds[i]).validFor + q.ISSUED_AT_TOLERANCE() + 1;
         skip(silence - 1);
         vm.expectRevert(abi.encodeWithSelector(Questions.TooEarlyToAbandon.selector, askedAt + silence));
         q.abandon(feeds[i]);

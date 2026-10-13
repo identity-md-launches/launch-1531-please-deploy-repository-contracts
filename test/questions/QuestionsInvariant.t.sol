@@ -71,6 +71,7 @@ contract QuestionsHandler is Test {
     /// @dev Tips paid out by `collectTips`, tips earned by an answer, tips given back to a meter.
     uint256 public tipsCollected;
     uint256 public tipsEarnedInAll;
+    uint256 public tipsEarnedThroughSubmit;
     uint256 public tipsReturned;
     /// @dev Set if `collectTips` ever paid anything but what the handler's book said was earned.
     bool public collectBroken;
@@ -120,8 +121,7 @@ contract QuestionsHandler is Test {
 
     /// @dev Records that a feed stored an answer from this attestation. A feed taking the same
     /// attestation a second time is what Q2 forbids. The round's tip is earned with the answer: by
-    /// the keeper that opened the round when the Intake delivered it, by this handler when it
-    /// handed the answer in itself.
+    /// the keeper that opened the round, whether delivered or submitted.
     function _accept(bytes32 feedId, OracleAttestation.Attestation memory a, bytes memory signature, bool bySubmit)
         internal
     {
@@ -133,8 +133,9 @@ contract QuestionsHandler is Test {
         uint256 tip = tipHeldFor[feedId];
         if (tip != 0) {
             tipsPending[keeperOf[feedId]] -= tip;
-            tipsEarned[bySubmit ? address(this) : keeperOf[feedId]] += tip;
+            tipsEarned[keeperOf[feedId]] += tip;
             tipsEarnedInAll += tip;
+            if (bySubmit) tipsEarnedThroughSubmit += tip;
             tipHeldFor[feedId] = 0;
         }
     }
@@ -234,7 +235,7 @@ contract QuestionsHandler is Test {
         } catch {}
     }
 
-    /// @dev A keeper, or this handler (which earns tips when it hands answers in), takes out what
+    /// @dev A keeper, or this handler (which earns nothing merely for submitting), takes out what
     /// it has earned. It must be paid exactly what the handler's book says, and nothing that is
     /// still set aside for a pending round.
     function collect(uint256 whoSeed) external {
@@ -423,7 +424,12 @@ contract QuestionsHandler is Test {
     /// any round be closed. A call that only starts the thirty minutes closes nothing.
     function abandon(uint256 feedSeed, bool wait) external {
         bytes32 feedId = _feed(feedSeed);
-        if (wait) vm.warp(vm.getBlockTimestamp() + q.ABANDON_AFTER_SILENCE());
+        if (wait) {
+            vm.warp(
+                vm.getBlockTimestamp() + q.ABANDON_AFTER_SILENCE() + q.feedParams(feedId).validFor
+                    + q.ISSUED_AT_TOLERANCE() + 1
+            );
+        }
         (uint256 meterBefore,) = q.meterOf(feedId);
         try q.abandon(feedId) returns (bool closed) {
             if (closed) {
@@ -581,7 +587,7 @@ contract QuestionsInvariantTest is Test {
                 handler.fund(lap, f, 3e18 + lap);
                 handler.fundFor(lap, lap + f + 1, f, 1e17 + f);
             }
-            // The two keepers take out what they have earned; the handler's own tips stay put.
+            // The two keepers take out what they have earned.
             if (lap % 2 == 1) handler.collect(lap / 2 % 2);
             handler.donate(1e17);
             handler.pass(40, 1 hours);
@@ -598,7 +604,8 @@ contract QuestionsInvariantTest is Test {
         assertGt(handler.donated(), 0);
         assertGt(handler.tipsCollected(), 0, "no keeper collected a tip");
         assertGt(handler.tipsReturned(), 0, "no failed round gave its tip back");
-        assertGt(handler.tipsEarned(address(handler)), 0, "no tip was earned by handing an answer in");
+        assertGt(handler.tipsEarnedThroughSubmit(), 0, "no opener earned a tip through submission");
+        assertEq(handler.tipsEarned(address(handler)), 0, "a submitter took an opener's tip");
         assertGt(q.totalTips(), 0, "no tip is set aside or waiting to be collected");
         assertTrue(q.feedState(handler.feeds(0)).pending);
         for (uint256 f; f < houseFeeds; ++f) {

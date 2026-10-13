@@ -8,8 +8,7 @@ import {QuestionsFixture} from "./QuestionsFixture.sol";
 
 /// @notice The keeper tip from the moment a round is opened to the moment it is paid or given
 /// back. The rule: asking earns nothing. `request` takes the tip off the meter and sets it aside;
-/// an answer earns it (for the keeper that opened the round when the Intake delivers, for whoever
-/// calls `submit` when the answer is handed in); a round closed without an answer gives it back to
+/// an answer earns it for the keeper that opened the round, however it is delivered; a round closed without an answer gives it back to
 /// the meter. Earned tips leave only through `collectTips`.
 contract QuestionsTipsTest is QuestionsFixture {
     event TipsCollected(address indexed keeper, uint256 amount);
@@ -112,9 +111,8 @@ contract QuestionsTipsTest is QuestionsFixture {
         _assertCovered();
     }
 
-    /// @notice Somebody else hands the answer in: the tip is theirs. It pays for the answer, and
-    /// they are the one who brought it. The keeper that opened the round gets nothing.
-    function test_tip_goesToWhoeverHandsTheAnswerIn() public {
+    /// @notice An observer can deliver the answer but cannot take the opener's reserved tip.
+    function test_tip_staysWithTheOpenerWhenAnotherAccountSubmits() public {
         bytes32 intakeId = _request(feedId);
         OracleAttestation.Attestation memory a = _attestation(feedId, abi.encode(uint256(7)));
         bytes memory signature = _sign(a);
@@ -122,24 +120,24 @@ contract QuestionsTipsTest is QuestionsFixture {
 
         vm.prank(bob);
         q.submit(feedId, a, signature);
-        _assertTips(keeper, 0, 0);
-        _assertTips(bob, TIP, 0);
+        _assertTips(keeper, TIP, 0);
+        _assertTips(bob, 0, 0);
         assertEq(q.totalTips(), TIP);
         _assertCovered();
 
-        uint256 bobBefore = imd.balanceOf(bob);
-        vm.prank(bob);
-        assertEq(q.collectTips(), TIP);
-        assertEq(imd.balanceOf(bob), bobBefore + TIP);
+        uint256 keeperBefore = imd.balanceOf(keeper);
         vm.prank(keeper);
+        assertEq(q.collectTips(), TIP);
+        assertEq(imd.balanceOf(keeper), keeperBefore + TIP);
+        vm.prank(bob);
         assertEq(q.collectTips(), 0);
     }
 
     /// @notice The Intake's writer is late. The oracle's signed answer to the round's own request
-    /// is public, and from thirty minutes after the request anyone may hand it in and is paid the
-    /// tip, whoever opened the round. One second sooner nobody can, and a delivery by the Intake
+    /// is public, and from thirty minutes after the request anyone may hand it in. The opener
+    /// keeps the tip. One second sooner nobody can, and a delivery by the Intake
     /// in that time pays the keeper as usual.
-    function test_tip_ofARoundWhoseCallbackIsLateGoesToWhoeverHandsTheAnswerInFirst() public {
+    function test_tip_ofARoundWhoseCallbackIsLateStaysWithTheOpener() public {
         bytes32 intakeId = _request(feedId);
         uint256 askedAt = vm.getBlockTimestamp();
         // The oracle signs two minutes after the request.
@@ -161,13 +159,13 @@ contract QuestionsTipsTest is QuestionsFixture {
         vm.revertToState(snapshot);
 
         // One second later the Intake has still not delivered. Somebody else hands the same
-        // answer in and is paid; the keeper that opened the round is not.
+        // answer in; the keeper that opened the round still receives the tip.
         skip(1);
         _assertTips(keeper, 0, TIP);
         vm.prank(bob);
         q.submit(feedId, a, signature);
-        _assertTips(bob, TIP, 0);
-        _assertTips(keeper, 0, 0);
+        _assertTips(bob, 0, 0);
+        _assertTips(keeper, TIP, 0);
         (uint256 value,,, uint64 round,) = q.latest(feedId);
         assertEq(round, 1);
         assertEq(value, 7);
@@ -176,8 +174,8 @@ contract QuestionsTipsTest is QuestionsFixture {
 
         // The writer's call, when it comes, finds the round settled and changes nothing.
         assertFalse(_complete(intakeId, a, signature));
-        _assertTips(bob, TIP, 0);
-        _assertTips(keeper, 0, 0);
+        _assertTips(bob, 0, 0);
+        _assertTips(keeper, TIP, 0);
         assertEq(q.feedState(feedId).failStreak, 0);
     }
 
