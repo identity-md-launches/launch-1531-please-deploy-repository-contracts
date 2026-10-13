@@ -1,0 +1,37 @@
+{
+  "kind": "evm_contracts",
+  "contracts": [
+    {
+      "contract": "Questions",
+      "constructorArgs": [
+        "0xa43e6f75ee006411f79ac1c84120606c2330de82",
+        "0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7",
+        "0x5598aa9146215bc13eb26f2c692ad1461fd32982"
+      ]
+    },
+    {
+      "contract": "JobsReport",
+      "constructorArgs": [
+        "$contract:Questions",
+        "0x4bf83605cd50e9658472bde9be314bb3848a563301fa793328bef17ad2a07b61",
+        "0xfde22d9c1b97b7ce9763dff388a66366f9012d4ba7c57c3239377a75532bee4d",
+        "0x22ad8df0e0af07aa59e29aa7f5540e0022fbfda0651ccae3eccb968553a14835"
+      ]
+    },
+    {
+      "contract": "Payroll",
+      "constructorArgs": [
+        "0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7",
+        "0x9efa934d9fad4ae28c998a40195646b965a97247",
+        "0x0000ec93127baa929e58e97dd0095a2bfb38ec1d",
+        "2000",
+        "0xde152afb7db5373f34876e1499fbd893a82dd336",
+        "$contract:Questions",
+        "0x4bf83605cd50e9658472bde9be314bb3848a563301fa793328bef17ad2a07b61",
+        "0xfde22d9c1b97b7ce9763dff388a66366f9012d4ba7c57c3239377a75532bee4d",
+        "0x22ad8df0e0af07aa59e29aa7f5540e0022fbfda0651ccae3eccb968553a14835"
+      ]
+    }
+  ],
+  "notes": "Contracts only. No token, no owner, nothing to call after deployment."
+}
